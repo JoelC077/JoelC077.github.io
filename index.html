@@ -266,8 +266,18 @@
               <input type="number" step="0.1" id="in-weight" placeholder="e.g. 82.0">
             </div>
             <div class="field">
-              <label>Active cal (Apple Watch) <button class="ghost" style="padding:1px 6px;font-size:10px;margin-left:6px" onclick="pasteActive()">paste from clipboard</button></label>
+              <label>Active cal (Watch)</label>
               <input type="number" id="in-active" placeholder="e.g. 450">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Resting cal (Watch)</label>
+              <input type="number" id="in-resting" placeholder="e.g. 1750">
+            </div>
+            <div class="field">
+              <label>Steps (Watch)</label>
+              <input type="number" id="in-steps" placeholder="e.g. 12000">
             </div>
           </div>
           <div class="field-row">
@@ -302,7 +312,7 @@
       <h3 style="margin-top:0">7-day history</h3>
       <table id="history-table">
         <thead>
-          <tr><th>Date</th><th class="num">kcal</th><th class="num">P</th><th class="num">F</th><th class="num">C</th><th class="num">Active</th><th class="num">Weight</th><th class="num">Deficit</th></tr>
+          <tr><th>Date</th><th class="num">kcal</th><th class="num">P</th><th class="num">F</th><th class="num">C</th><th class="num">Burn</th><th class="num">Steps</th><th class="num">Weight</th><th class="num">Deficit</th></tr>
         </thead>
         <tbody id="history-body"></tbody>
       </table>
@@ -407,7 +417,7 @@ function todayKey() {
 }
 function ensureToday() {
   const k = todayKey();
-  if (!dailyLog[k]) dailyLog[k] = { meals: [], weight: null, activeCal: null, water: null, sleep: null, notes: '' };
+  if (!dailyLog[k]) dailyLog[k] = { meals: [], weight: null, activeCal: null, resting: null, steps: null, water: null, sleep: null, notes: '' };
   return dailyLog[k];
 }
 
@@ -578,9 +588,13 @@ function dayTotals(key) {
 }
 function deficitToday() {
   const k = todayKey();
-  const day = dailyLog[k] || { meals: [], activeCal: 0 };
+  const day = dailyLog[k] || { meals: [], activeCal: 0, restingCal: 0 };
   const t = dayTotals(k);
-  const burn = settings.tdee + (day.activeCal || 0);
+  // Prefer Watch's resting energy when available — it's more accurate than TDEE estimate.
+  // burn = active + resting (from Watch). If no resting, fall back to TDEE + active.
+  const burn = day.restingCal
+    ? ((day.activeCal || 0) + day.restingCal)
+    : (settings.tdee + (day.activeCal || 0));
   return { intake: t.kcal, burn, deficit: burn - t.kcal };
 }
 
@@ -664,6 +678,8 @@ function renderDayInputs() {
   const day = ensureToday();
   document.getElementById('in-weight').value = day.weight ?? '';
   document.getElementById('in-active').value = day.activeCal ?? '';
+  document.getElementById('in-resting').value = day.restingCal ?? '';
+  document.getElementById('in-steps').value = day.steps ?? '';
   document.getElementById('in-water').value = day.water ?? '';
   document.getElementById('in-sleep').value = day.sleep ?? '';
   document.getElementById('in-notes').value = day.notes ?? '';
@@ -674,10 +690,14 @@ function saveDayData() {
   const day = ensureToday();
   const w = document.getElementById('in-weight').value;
   const a = document.getElementById('in-active').value;
+  const r = document.getElementById('in-resting').value;
+  const st = document.getElementById('in-steps').value;
   const wa = document.getElementById('in-water').value;
   const s = document.getElementById('in-sleep').value;
   day.weight = w ? parseFloat(w) : null;
   day.activeCal = a ? parseInt(a) : null;
+  day.restingCal = r ? parseInt(r) : null;
+  day.steps = st ? parseInt(st) : null;
   day.water = wa ? parseFloat(wa) : null;
   day.sleep = s ? parseFloat(s) : null;
   day.notes = document.getElementById('in-notes').value;
@@ -695,11 +715,11 @@ function editTDEE() {
 function renderHistory() {
   const tbody = document.getElementById('history-body');
   const keys = Object.keys(dailyLog).sort().reverse().slice(0, 7);
-  if (keys.length === 0) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">No data yet — log meals on the Meal Builder tab</td></tr>'; return; }
+  if (keys.length === 0) { tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--muted)">No data yet — log meals on the Meal Builder tab</td></tr>'; return; }
   tbody.innerHTML = keys.map(k => {
     const d = dailyLog[k];
     const t = dayTotals(k);
-    const burn = settings.tdee + (d.activeCal || 0);
+    const burn = d.restingCal ? ((d.activeCal||0) + d.restingCal) : (settings.tdee + (d.activeCal || 0));
     const def = burn - t.kcal;
     const dateStr = new Date(k).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
     const carbClass = t.c > TARGETS.c ? 'over' : 'good';
@@ -709,7 +729,8 @@ function renderHistory() {
       <td class="num">${t.p.toFixed(0)}</td>
       <td class="num">${t.f.toFixed(0)}</td>
       <td class="num ${carbClass}">${t.c.toFixed(1)}</td>
-      <td class="num">${d.activeCal ?? '—'}</td>
+      <td class="num">${Math.round(burn) || '—'}</td>
+      <td class="num">${d.steps ?? '—'}</td>
       <td class="num">${d.weight ?? '—'}</td>
       <td class="num ${def>=200?'good':(def<0?'over':'')}">${t.kcal>0?(def>=0?'−':'+')+Math.abs(Math.round(def)):'—'}</td>
     </tr>`;
@@ -735,7 +756,8 @@ function renderProgress() {
   for (const k of keys) {
     const t = dayTotals(k);
     if (t.kcal === 0) continue;
-    const burn = settings.tdee + (dailyLog[k].activeCal || 0);
+    const d = dailyLog[k];
+    const burn = d.restingCal ? ((d.activeCal||0) + d.restingCal) : (settings.tdee + (d.activeCal || 0));
     avgDef += (burn - t.kcal);
     count++;
   }
@@ -775,22 +797,24 @@ function showToast(msg) {
 function applyUrlParams() {
   const params = new URLSearchParams(window.location.search);
   const active = params.get('active');
+  const resting = params.get('resting');
+  const steps = params.get('steps');
   const weight = params.get('weight');
   const water = params.get('water');
   const sleep = params.get('sleep');
-  if (!active && !weight && !water && !sleep) return;
+  if (!active && !resting && !steps && !weight && !water && !sleep) return;
   const day = ensureToday();
   let bits = [];
-  if (active) { day.activeCal = parseInt(active); bits.push(`active ${active} kcal`); }
-  if (weight) { day.weight = parseFloat(weight); bits.push(`weight ${weight} kg`); }
-  if (water) { day.water = parseFloat(water); bits.push(`water ${water} L`); }
-  if (sleep) { day.sleep = parseFloat(sleep); bits.push(`sleep ${sleep} h`); }
+  if (active) { day.activeCal = parseInt(active); bits.push(`active ${active}`); }
+  if (resting) { day.restingCal = parseInt(resting); bits.push(`resting ${resting}`); }
+  if (steps) { day.steps = parseInt(steps); bits.push(`${steps} steps`); }
+  if (weight) { day.weight = parseFloat(weight); bits.push(`${weight}kg`); }
+  if (water) { day.water = parseFloat(water); bits.push(`water ${water}L`); }
+  if (sleep) { day.sleep = parseFloat(sleep); bits.push(`sleep ${sleep}h`); }
   localStorage.setItem('dailyLog', JSON.stringify(dailyLog));
-  // Force tracker view so user sees the result
   currentMode = 'track';
   localStorage.setItem('mode', 'track');
-  showToast('Auto-synced from Watch: ' + bits.join(', '));
-  // Clean the URL so refresh doesn't re-apply
+  showToast('Synced from Watch: ' + bits.join(', '));
   history.replaceState({}, '', window.location.pathname);
 }
 
